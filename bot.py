@@ -5,6 +5,10 @@ import imaplib
 import email
 import telebot
 from flask import Flask, request
+from email.header import decode_header, make_header
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Загружаем переменные окружения
 EMAIL = os.getenv("EMAIL")                   # Твой Gmail
@@ -17,62 +21,68 @@ IMAP_SERVER = "imap.gmail.com"
 # Инициализируем Telegram-бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+
+
+def decode_mime_header(header_value):
+    try:
+        return str(make_header(decode_header(header_value)))
+    except Exception as e:
+        # Можно оставить ошибку для отладки, если нужно
+        print("DEBUG: Ошибка декодирования заголовка:", e, flush=True)
+        return header_value
+
 def check_email_loop():
     """Проверяет входящие письма каждые 30 секунд и пересылает их в Telegram,
-    если тело письма содержит ключевое слово "пересечение" (без учета регистра)."""
+    если в теле письма есть слово 'пересечение'."""
     while True:
         try:
-            print("DEBUG: Проверяю почту...")
+            print("DEBUG: Проверяю почту...", flush=True)
             mail = imaplib.IMAP4_SSL(IMAP_SERVER)
             mail.login(EMAIL, EMAIL_PASSWORD)
             mail.select("inbox")
-
-            # Получаем список непрочитанных писем
+            
             result, data = mail.search(None, "UNSEEN")
             email_ids = data[0].split()
-
-            print(f"DEBUG: Найдено писем: {len(email_ids)}")
-
+            print(f"DEBUG: Найдено непрочитанных писем: {len(email_ids)}", flush=True)
+            
             if email_ids:
                 for num in email_ids:
                     result, msg_data = mail.fetch(num, "(RFC822)")
                     raw_email = msg_data[0][1]
                     msg = email.message_from_bytes(raw_email)
-
-                    subject = msg["Subject"] if msg["Subject"] else ""
+                    
+                    # Декодируем заголовок
+                    raw_subject = msg["Subject"] if msg["Subject"] else ""
+                    subject = decode_mime_header(raw_subject)
+                    
                     body = ""
-
-                    # Собираем текст письма
                     if msg.is_multipart():
                         for part in msg.walk():
                             if part.get_content_type() == "text/plain":
                                 body += part.get_payload(decode=True).decode("utf-8", errors="ignore")
                     else:
                         body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
-
-                    print("DEBUG: Обнаружено письмо:")
-                    print("Тема:", subject)
-                    print("Тело письма:", body)
-
-                    # Фильтрация: письмо обрабатывается, только если в теле есть слово "пересечение"
+                    
+                    print("DEBUG: Обнаружено письмо:", flush=True)
+                    print("DEBUG: Тема:", subject, flush=True)
+                    print("DEBUG: Тело письма:", body, flush=True)
+                    
+                    # Фильтрация: обрабатываем письмо, только если в теле есть слово "пересечение"
                     if "пересечение" not in body.lower():
-                        print("DEBUG: Письмо пропущено (ключевое слово не найдено).")
+                        print("DEBUG: Письмо пропущено (ключевое слово не найдено)", flush=True)
                         continue
-
-                    # Формируем сообщение: выводим только тему и тело письма
+                    
                     message_text = f"{subject}\n\n{body}"
                     bot.send_message(CHAT_ID, message_text)
-                    print(f"DEBUG: Отправлено в Telegram: {subject}")
-
+                    print(f"DEBUG: Отправлено в Telegram: {subject}", flush=True)
             else:
-                print("DEBUG: Нет новых писем.")
-
+                print("DEBUG: Нет новых писем.", flush=True)
+            
             mail.close()
             mail.logout()
-
         except Exception as e:
-            print(f"Ошибка при получении писем: {e}")
-
+            print(f"DEBUG: Ошибка при получении писем: {e}", flush=True)
+        
         time.sleep(30)
 
 # Создаем Flask-приложение (необходимо для деплоя на Render)
@@ -86,9 +96,6 @@ def tradingview_alert():
     return {"status": "ok"}, 200
 
 if __name__ == "__main__":
-    # Запускаем фоновый поток для проверки почты
     email_thread = threading.Thread(target=check_email_loop, daemon=True)
     email_thread.start()
-
-    # Запускаем Flask-сервер на указанном порту
     app.run(host="0.0.0.0", port=PORT)
